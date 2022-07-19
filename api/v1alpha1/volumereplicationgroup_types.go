@@ -155,12 +155,27 @@ const (
 	VRGActionRelocate = VRGAction("Relocate")
 )
 
+type ResourceCaptureInstance struct {
+	Name                          string               `json:"name,omitempty"`
+	IncludeClusterScopedResources bool                 `json:"includeClusterScopedResources,omitempty"`
+	IncludedResources             []string             `json:"includedResources,omitempty"`
+	ExcludedResources             []string             `json:"excludedResources,omitempty"`
+	LabelSelector                 metav1.LabelSelector `json:"labelSelector,omitempty"`
+}
+
+type ResourceRestoreInstance struct {
+	BackupName                    string   `json:"backupName,omitempty"`
+	IncludeClusterScopedResources bool     `json:"includeClusterScopedResources,omitEmpty"`
+	IncludedResources             []string `json:"includedResources,omitempty"`
+	ExcludedResources             []string `json:"excludedResources"`
+}
+
 type KubeObjectProtectionSpec struct {
 	//+optional
-	ResourceCaptureOrder [][]string `json:"resourceBackupOrder,omitempty"`
+	ResourceCaptureOrder []ResourceCaptureInstance `json:"resourceCaptureOrder,omitempty"`
 
 	//+optional
-	ResourceRecoveryOrder [][]string `json:"resourceRestoreOrder,omitempty"`
+	ResourceRecoveryOrder []ResourceRestoreInstance `json:"resourceRecoveryOrder,omitempty"`
 }
 
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.

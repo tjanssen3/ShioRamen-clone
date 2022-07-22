@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -360,126 +359,6 @@ const (
 	pvVRAnnotationRetentionValue  = "retained"
 	PVRestoreAnnotation           = "volumereplicationgroups.ramendr.openshift.io/ramen-restore"
 )
-
-// get KubeObjectProtection struct
-func (v *VRGInstance) processTypeSequence(operation ramendrv1alpha1.TypeSequenceOperation) error {
-	categories, err := v.getFullTypeSequence(operation)
-	if err != nil {
-		return fmt.Errorf("failed to processTypeSequence (%w)", err)
-	}
-
-	errors := make([]error, 0, len(categories))
-
-	for includeIndex, includeListUnprocessed := range categories {
-		for listIndex, listItem := range includeListUnprocessed {
-			v.log.Info(fmt.Sprintf("listIndex: %d-%d=%s", includeIndex, listIndex, listItem))
-		}
-
-		backupNamespacedName := getBackupNamespacedName(v.instance.Namespace, includeIndex)
-		includeList, excludeList := getIncludeExcludeResourcesList(categories, includeIndex)
-
-		err = v.processTypeCategory(includeList, excludeList, operation, backupNamespacedName.Name)
-
-		if err != nil {
-			err = fmt.Errorf("failed to %s category %d: %s (%w)",
-				string(operation), includeIndex, includeList, err)
-			errors = append(errors, err)
-		}
-
-		backupComplete := false
-		for !backupComplete {
-			backupComplete, err = backupIsDone(v.ctx, v.reconciler.APIReader,
-				objectWriter{v.reconciler.Client, v.ctx, v.log}, backupNamespacedName)
-
-			if err != nil {
-				errors = append(errors, err)
-				backupComplete = true
-			}
-		}
-	}
-
-	if len(errors) > 0 {
-		return errors[0]
-	}
-
-	return nil
-}
-
-func getBackupNamespacedName(namespace string, index int) types.NamespacedName {
-	name := fmt.Sprintf("component-%d", index)
-	namespacedName := types.NamespacedName{
-		Name:      name,
-		Namespace: namespace,
-	}
-
-	return namespacedName
-}
-
-func getIncludeExcludeResourcesList(categories [][]string, listIndex int) ([]string, []string) {
-	included := make([]string, 0)
-	excluded := make([]string, 0)
-	history := make([]string, 0)
-
-	for i := 0; i <= listIndex; i++ {
-		category := categories[i]
-
-		for j := 0; j < len(category); j++ {
-			current := category[j]
-
-			switch {
-			case strings.Contains(current, "!"):
-				excluded = history
-				exclude := strings.Replace(current, "!", "", 1)
-				excluded = append(excluded, exclude)
-				included = append(included, "*")
-
-				continue
-			case strings.Contains(current, ".*"):
-				excluded = history // exclude everything that has already been processed
-
-				included = append(included, "*")
-			case i == listIndex:
-				included = append(included, current) // current group for processing
-			}
-
-			history = append(history, current)
-		}
-	}
-
-	return included, excluded
-}
-
-func (v *VRGInstance) getFullTypeSequence(operation ramendrv1alpha1.TypeSequenceOperation) ([][]string, error) {
-	categories := make([][]string, 0)
-
-	switch operation {
-	case ramendrv1alpha1.Backup:
-		categories = v.instance.Spec.KubeObjectProtection.ResourceCaptureOrder
-	case ramendrv1alpha1.Restore:
-		categories = v.instance.Spec.KubeObjectProtection.ResourceRecoveryOrder
-	default:
-		return categories, fmt.Errorf(
-			fmt.Sprintf("invalid operation '%s' passed to getFullTypeSequence.", operation))
-	}
-
-	return categories, nil
-}
-
-func (v *VRGInstance) processTypeCategory(includeList, excludeList []string,
-	operation ramendrv1alpha1.TypeSequenceOperation, backupName string) error {
-	// take input categories and take a backup of those types in current VRG namespace
-	if operation == ramendrv1alpha1.Backup {
-		err := v.kubeObjectsProtect(includeList, excludeList, backupName)
-		if err != nil {
-			return fmt.Errorf("processTypeCategory failed backup in kubeObjectsProtect (%w)", err)
-		}
-	} else if operation == ramendrv1alpha1.Restore {
-		// TODO
-		v.log.Info("processTypeCategory: restore not yet supported.")
-	}
-
-	return nil
-}
 
 func (v *VRGInstance) processVRG() (ctrl.Result, error) {
 	if err := v.validateVRGState(); err != nil {
@@ -909,46 +788,6 @@ func (v *VRGInstance) reconcileAsPrimary() bool {
 	return requeueForVolSync || requeueForVolRep
 }
 
-func (v *VRGInstance) kubeObjectsProtect(includedResourceList, excludedResourceList []string, backupName string) error {
-	errors := make([]error, 0, len(v.instance.Spec.S3Profiles))
-
-	for _, s3ProfileName := range v.instance.Spec.S3Profiles {
-		// TODO reuse objectStore kube objects from pv upload
-		objectStore, err := v.reconciler.ObjStoreGetter.ObjectStore(
-			v.ctx,
-			v.reconciler.APIReader,
-			s3ProfileName,
-			v.namespacedName,
-			v.log,
-		)
-		if err != nil {
-			v.log.Error(err, "kube objects protect object store access", "profile", s3ProfileName)
-			errors = append(errors, err)
-
-			continue
-		}
-
-		if err := kubeObjectsProtect(v.ctx, v.reconciler.Client, v.reconciler.APIReader, v.log,
-			objectStore.AddressComponent1(),
-			objectStore.AddressComponent2(),
-			v.s3KeyPrefix(),
-			v.instance.Namespace,
-			VeleroNamespaceNameDefault,
-			includedResourceList,
-			excludedResourceList,
-			backupName,
-		); err != nil {
-			errors = append(errors, err)
-		}
-	}
-
-	if len(errors) > 0 {
-		return errors[0]
-	}
-
-	return nil
-}
-
 // processAsSecondary reconciles the current instance of VRG as secondary
 func (v *VRGInstance) processAsSecondary() (ctrl.Result, error) {
 	v.log.Info("Entering processing VolumeReplicationGroup as Secondary")
@@ -1160,7 +999,7 @@ func (v *VRGInstance) vrgReadyStatus() {
 
 func (v *VRGInstance) updateVRGClusterDataProtectedCondition() error {
 	// TODO skip for secondaries?
-	if err := v.processTypeSequence(ramendrv1alpha1.Backup); err != nil {
+	if err := v.kubeObjectsProtect(); err != nil {
 		return err
 	}
 

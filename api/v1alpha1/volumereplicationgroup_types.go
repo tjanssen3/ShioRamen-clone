@@ -156,18 +156,32 @@ const (
 )
 
 type ResourceCaptureInstance struct {
-	Name                          string               `json:"name,omitempty"`
-	IncludeClusterScopedResources bool                 `json:"includeClusterScopedResources,omitempty"`
-	IncludedResources             []string             `json:"includedResources,omitempty"`
-	ExcludedResources             []string             `json:"excludedResources,omitempty"`
-	LabelSelector                 metav1.LabelSelector `json:"labelSelector,omitempty"`
+	Name string `json:"name,omitempty"`
+
+	//+optional
+	IncludeClusterScopedResources bool `json:"includeClusterScopedResources,omitempty"`
+
+	//+optional
+	IncludedResources []string `json:"includedResources,omitempty"`
+
+	//+optional
+	ExcludedResources []string `json:"excludedResources,omitempty"`
+
+	//+optional
+	LabelSelector metav1.LabelSelector `json:"labelSelector,omitempty"`
 }
 
 type ResourceRestoreInstance struct {
-	BackupName                    string   `json:"backupName,omitempty"`
-	IncludeClusterScopedResources bool     `json:"includeClusterScopedResources,omitEmpty"`
-	IncludedResources             []string `json:"includedResources,omitempty"`
-	ExcludedResources             []string `json:"excludedResources"`
+	BackupName string `json:"backupName,omitempty"`
+
+	//+optional
+	IncludeClusterScopedResources bool `json:"includeClusterScopedResources,omitempty"`
+
+	//+optional
+	IncludedResources []string `json:"includedResources,omitempty"`
+
+	//+optional
+	ExcludedResources []string `json:"excludedResources,omitempty"`
 }
 
 type KubeObjectProtectionSpec struct {

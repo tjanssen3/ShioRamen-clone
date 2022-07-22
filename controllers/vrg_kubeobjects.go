@@ -16,6 +16,14 @@ limitations under the License.
 
 package controllers
 
+import (
+	"fmt"
+
+	"k8s.io/apimachinery/pkg/types"
+
+	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
+)
+
 func (v *VRGInstance) kubeObjectsProtect() error {
 	if v.instance.Spec.KubeObjectProtection == nil {
 		v.log.Info("Kube object protection disabled")
@@ -41,6 +49,31 @@ func (v *VRGInstance) kubeObjectsProtect() error {
 			continue
 		}
 
+		err = v.processSubBackups(objectStore, s3ProfileName)
+		if err != nil {
+			errors := append(errors, err)
+
+			return errors[0]
+		}
+	}
+
+	return nil
+}
+
+func (v *VRGInstance) processSubBackups(objectStore ObjectStorer, s3ProfileName string) error {
+	categories := v.getTypeSequenceSubBackups()
+
+	var err error // declare for scope
+
+	for _, captureInstance := range categories {
+		includeList, excludeList := getTypeSequenceResourceList(captureInstance)
+
+		spec := captureInstance.DeepCopy() // don't modify spec with processed results
+		spec.IncludedResources = includeList
+		spec.ExcludedResources = excludeList
+
+		sourceNamespacedName := types.NamespacedName{Name: v.instance.Name, Namespace: v.instance.Namespace}
+
 		if err := kubeObjectsProtect(
 			v.ctx,
 			v.reconciler.Client,
@@ -49,19 +82,78 @@ func (v *VRGInstance) kubeObjectsProtect() error {
 			objectStore.AddressComponent1(),
 			objectStore.AddressComponent2(),
 			v.s3KeyPrefix(),
-			v.instance.Namespace,
-			VeleroNamespaceNameDefault,
+			sourceNamespacedName,
+			captureInstance,
 		); err != nil {
 			v.log.Error(err, "kube object protect", "profile", s3ProfileName)
-			errors = append(errors, err)
+			// don't return error yet since it could be non-fatal (e.g. slow API server)
+		}
+
+		backupNamespacedName := getBackupNamespacedName(sourceNamespacedName.Name,
+			sourceNamespacedName.Namespace, spec.Name, getSequenceNumber())
+
+		// TODO: remove tight loop here
+		backupComplete := false
+		for !backupComplete {
+			backupComplete, err = backupIsDone(v.ctx, v.reconciler.APIReader,
+				objectWriter{v.reconciler.Client, v.ctx, v.log}, backupNamespacedName)
+
+			if err != nil {
+				backupComplete = true
+			}
 		}
 	}
 
-	if len(errors) > 0 {
-		return errors[0]
+	return err
+}
+
+// return values: includedResources, excludedResources
+func getTypeSequenceResourceList(subresource ramendrv1alpha1.ResourceCaptureInstance) ([]string, []string) {
+	included := []string{"*"} // include everything
+	excluded := []string{}    // exclude nothing
+
+	if subresource.IncludedResources != nil {
+		included = subresource.IncludedResources
 	}
 
-	return nil
+	if subresource.ExcludedResources != nil {
+		excluded = subresource.ExcludedResources
+	}
+
+	return included, excluded
+}
+
+func (v *VRGInstance) getTypeSequenceSubBackups() []ramendrv1alpha1.ResourceCaptureInstance {
+	if v.instance.Spec.KubeObjectProtection != nil &&
+		v.instance.Spec.KubeObjectProtection.ResourceCaptureOrder != nil {
+		return v.instance.Spec.KubeObjectProtection.ResourceCaptureOrder
+	}
+
+	// default case: no backup groups defined
+	return getTypeSequenceDefault()
+}
+
+func getTypeSequenceDefault() []ramendrv1alpha1.ResourceCaptureInstance {
+	instance := make([]ramendrv1alpha1.ResourceCaptureInstance, 1)
+
+	includedResources := make([]string, 0)
+	includedResources[0] = "*"
+
+	instance[0].Name = "everything"
+	instance[0].IncludeClusterScopedResources = false
+	instance[0].IncludedResources = includedResources
+
+	return instance
+}
+
+func getBackupNamespacedName(vrg, namespace, backupName string, sequenceNumber int) types.NamespacedName {
+	name := fmt.Sprintf("%s-%s-%s-%d", vrg, namespace, backupName, sequenceNumber)
+	namespacedName := types.NamespacedName{
+		Name:      name,
+		Namespace: VeleroNamespaceNameDefault, // must create backups in the same namespace as Velero/OADP
+	}
+
+	return namespacedName
 }
 
 func (v *VRGInstance) kubeObjectsRecover(objectStore ObjectStorer) error {

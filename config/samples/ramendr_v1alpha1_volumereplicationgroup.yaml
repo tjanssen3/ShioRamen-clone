@@ -2,7 +2,7 @@ apiVersion: ramendr.openshift.io/v1alpha1
 kind: VolumeReplicationGroup
 metadata:
   name: volumereplicationgroup-sample
-  namespace: velero
+  namespace: velero-test
 spec:
   pvcSelector:
     matchLabels:
